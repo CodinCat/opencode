@@ -1,3 +1,6 @@
+import path from "path"
+import fs from "fs/promises"
+import crypto from "crypto"
 import { experimental_createMCPClient, type Tool } from "ai"
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js"
 import { SSEClientTransport } from "@modelcontextprotocol/sdk/client/sse.js"
@@ -9,9 +12,78 @@ import { NamedError } from "../util/error"
 import { z } from "zod"
 import { Session } from "../session"
 import { Bus } from "../bus"
+import { Global } from "../global"
 
 export namespace MCP {
   const log = Log.create({ service: "mcp" })
+
+  type ApprovalRecord = {
+    [projectKey: string]: {
+      [mcpKey: string]: {
+        hash: string
+        approved: boolean
+        time: number
+      }
+    }
+  }
+
+  const approvalsPath = path.join(Global.Path.data, "mcp-approvals.json")
+
+  async function readApprovals(): Promise<ApprovalRecord> {
+    const file = Bun.file(approvalsPath)
+    return file.json().catch(() => ({}))
+  }
+
+  async function writeApprovals(data: ApprovalRecord) {
+    await fs.mkdir(path.dirname(approvalsPath), { recursive: true }).catch(() => {})
+    await Bun.write(approvalsPath, JSON.stringify(data, null, 2))
+    await fs.chmod(approvalsPath, 0o600).catch(() => {})
+  }
+
+  function normalizedSpec(mcp: Config.Mcp) {
+    return mcp.type === "local"
+      ? { type: mcp.type, command: mcp.command, environment: mcp.environment ?? {} }
+      : { type: mcp.type, url: (mcp as any).url, headers: (mcp as any).headers ?? {} }
+  }
+
+  function specHash(name: string, mcp: Config.Mcp) {
+    const json = JSON.stringify({ name, normalized: normalizedSpec(mcp) })
+    return crypto.createHash("sha256").update(json).digest("hex")
+  }
+
+  function projectKey() {
+    const app = App.info()
+    return app.path.root
+  }
+
+  async function isApproved(name: string, mcp: Config.Mcp) {
+    const key = projectKey()
+    const approvals = await readApprovals()
+    const rec = approvals[key]?.[name]
+    const hash = specHash(name, mcp)
+    return rec?.approved === true && rec.hash === hash
+  }
+
+  async function isRejected(name: string) {
+    const key = projectKey()
+    const approvals = await readApprovals()
+    const rec = approvals[key]?.[name]
+    return rec?.approved === false
+  }
+
+  async function getApprovalRecord(name: string) {
+    const key = projectKey()
+    const approvals = await readApprovals()
+    return approvals[key]?.[name]
+  }
+
+  async function markApproved(name: string, mcp: Config.Mcp) {
+    const key = projectKey()
+    const approvals = await readApprovals()
+    approvals[key] = approvals[key] || {}
+    approvals[key]![name] = { approved: true, hash: specHash(name, mcp), time: Date.now() }
+    await writeApprovals(approvals)
+  }
 
   export const Failed = NamedError.create(
     "MCPFailed",
@@ -24,6 +96,7 @@ export namespace MCP {
     "mcp",
     async () => {
       const cfg = await Config.get()
+      const globalCfg = await Config.global()
       const clients: {
         [name: string]: Awaited<ReturnType<typeof experimental_createMCPClient>>
       } = {}
@@ -31,6 +104,39 @@ export namespace MCP {
         if (mcp.enabled === false) {
           log.info("mcp server disabled", { key })
           continue
+        }
+        // Allow MCPs sourced from global config without approval
+        const globalSpec = globalCfg.mcp?.[key]
+        const isGlobalSame =
+          globalSpec && JSON.stringify(normalizedSpec(globalSpec as any)) === JSON.stringify(normalizedSpec(mcp as any))
+
+        let approved = false
+        if (isGlobalSame) {
+          approved = true
+        } else {
+          const rejected = await isRejected(key)
+          if (rejected) {
+            log.info("mcp server rejected", { key })
+            continue
+          }
+          approved = await isApproved(key, mcp)
+          if (!approved) {
+            const rec = await getApprovalRecord(key)
+            const msg =
+              rec && rec.approved === true && rec.hash !== specHash(key, mcp)
+                ? `MCP server "${key}" has changed since last approval. Run 'opencode mcp approve' to review and enable it.`
+                : `MCP server "${key}" requires approval. Run 'opencode mcp approve' to review and enable it.`
+            log.info("mcp server awaiting approval", { key, type: mcp.type })
+            Bus.publish(Session.Event.Error, {
+              error: {
+                name: "UnknownError",
+                data: {
+                  message: msg,
+                },
+              },
+            })
+            continue
+          }
         }
         log.info("found", { key, type: mcp.type })
         if (mcp.type === "remote") {
