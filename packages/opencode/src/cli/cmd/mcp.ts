@@ -1,12 +1,9 @@
-import path from "path"
-import fs from "fs/promises"
 import { cmd } from "./cmd"
 import { Client } from "@modelcontextprotocol/sdk/client/index.js"
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js"
 import * as prompts from "@clack/prompts"
 import { UI } from "../ui"
 import { Config } from "../../config/config"
-import { App } from "../../app/app"
 import { MCP } from "../../mcp"
 import { bootstrap } from "../bootstrap"
 
@@ -100,9 +97,7 @@ export const McpApproveCommand = cmd({
         return
       }
 
-      const allApprovals = await MCP.readApprovals()
-      const app = App.info()
-      const projectApprovals = allApprovals[app.path.root] || {}
+      const projectApprovals = await MCP.readApprovals()
 
       for (const [name, mcp] of entries) {
         if (mcp.enabled === false) {
@@ -131,12 +126,7 @@ export const McpApproveCommand = cmd({
         projectApprovals[name] = { approved: res === "approve", hash, time: Date.now() }
       }
 
-      await fs.mkdir(path.dirname(MCP.mcpApprovalsJson), { recursive: true })
-      await Bun.write(
-        MCP.mcpApprovalsJson,
-        JSON.stringify({ ...allApprovals, [app.path.root]: projectApprovals }, null, 2),
-      )
-      await fs.chmod(MCP.mcpApprovalsJson, 0o600)
+      await MCP.writeApprovals(projectApprovals)
 
       prompts.outro("Done")
     })

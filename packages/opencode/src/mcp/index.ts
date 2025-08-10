@@ -1,5 +1,6 @@
 import path from "path"
 import crypto from "crypto"
+import fs from "fs/promises"
 import { experimental_createMCPClient, type Tool } from "ai"
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js"
 import { SSEClientTransport } from "@modelcontextprotocol/sdk/client/sse.js"
@@ -11,22 +12,17 @@ import { NamedError } from "../util/error"
 import { z } from "zod"
 import { Session } from "../session"
 import { Bus } from "../bus"
-import { Global } from "../global"
 
 export namespace MCP {
   const log = Log.create({ service: "mcp" })
 
-  type ApprovalRecords = {
-    [projectKey: string]: {
-      [mcpKey: string]: {
-        hash: string
-        approved: boolean
-        time: number
-      }
+  type ApprovalRecord = {
+    [mcpKey: string]: {
+      hash: string
+      approved: boolean
+      time: number
     }
   }
-
-  export const mcpApprovalsJson = path.join(Global.Path.data, "mcp-approvals.json")
 
   export function normalizedSpec(mcp: Config.Mcp) {
     return mcp.type === "local"
@@ -46,9 +42,19 @@ export namespace MCP {
   }
 
   export async function readApprovals() {
-    const file = Bun.file(mcpApprovalsJson)
-    const allApprovals: ApprovalRecords = await file.json().catch(() => ({}))
-    return allApprovals || {}
+    const app = App.info()
+    const mcpFile = path.join(app.path.data, "mcp.json")
+    const approvals: ApprovalRecord = await Bun.file(mcpFile)
+      .json()
+      .catch(() => ({}))
+    return approvals || {}
+  }
+
+  export async function writeApprovals(approvals: ApprovalRecord) {
+    const app = App.info()
+    const mcpFile = path.join(app.path.data, "mcp.json")
+    await Bun.write(mcpFile, JSON.stringify(approvals, null, 2))
+    await fs.chmod(mcpFile, 0o600)
   }
 
   export const Failed = NamedError.create(
@@ -65,9 +71,7 @@ export namespace MCP {
       const clients: {
         [name: string]: Awaited<ReturnType<typeof experimental_createMCPClient>>
       } = {}
-      const allApprovals = await readApprovals()
-      const app = App.info()
-      const projectApprovals = allApprovals[app.path.root] || {}
+      const projectApprovals = await readApprovals()
 
       for (const [key, mcp] of Object.entries(cfg.mcp ?? {})) {
         if (mcp.enabled === false) {
