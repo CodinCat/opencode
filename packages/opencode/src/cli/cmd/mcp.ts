@@ -126,22 +126,15 @@ export const McpApproveCommand = cmd({
         // Skip MCPs that are identical to global config
         const globalSpec = globalCfg.mcp?.[name]
         const isGlobalSame =
-          globalSpec && JSON.stringify(normalizedSpec(globalSpec as any)) === JSON.stringify(normalizedSpec(mcp as any))
+          globalSpec && JSON.stringify(normalizedSpec(globalSpec)) === JSON.stringify(normalizedSpec(mcp))
         if (isGlobalSame) {
           continue
         }
-        const hash = specHash(name, mcp as any)
+        const hash = specHash(name, mcp)
         const current = approvals[app.path.root][name]
-        const approved = current?.approved === true && current?.hash === hash
+        const currentApproved: boolean | undefined = current?.approved
         const label =
-          mcp.type === "local"
-            ? `${name} (local) ${JSON.stringify((mcp as any).command)}`
-            : `${name} (remote) ${(mcp as any).url}`
-
-        if (approved) {
-          prompts.log.info(label + UI.Style.TEXT_DIM + " (already approved)")
-          continue
-        }
+          mcp.type === "local" ? `${name} (local) ${JSON.stringify(mcp.command)}` : `${name} (remote) ${mcp.url}`
 
         const res = await prompts.select({
           message: `Approve ${label}?`,
@@ -149,6 +142,7 @@ export const McpApproveCommand = cmd({
             { label: "Approve", value: "approve" },
             { label: "Reject", value: "reject" },
           ],
+          initialValue: currentApproved ? "approve" : currentApproved === false ? "reject" : undefined,
         })
         if (prompts.isCancel(res)) throw new UI.CancelledError()
 
