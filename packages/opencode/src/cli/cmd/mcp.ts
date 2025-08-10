@@ -86,12 +86,14 @@ export const McpAddCommand = cmd({
   },
 })
 
+function normalizedSpec(mcp: Config.Mcp) {
+  return mcp.type === "local"
+    ? { type: mcp.type, command: mcp.command, environment: mcp.environment ?? {} }
+    : { type: mcp.type, url: mcp.url, headers: mcp.headers ?? {} }
+}
+
 function specHash(name: string, mcp: Config.Mcp) {
-  const normalized =
-    mcp.type === "local"
-      ? { type: mcp.type, command: mcp.command, environment: mcp.environment ?? {} }
-      : { type: mcp.type, url: (mcp as any).url, headers: (mcp as any).headers ?? {} }
-  const json = JSON.stringify({ name, normalized })
+  const json = JSON.stringify({ name, normalized: normalizedSpec(mcp) })
   return crypto.createHash("sha256").update(json).digest("hex")
 }
 
@@ -116,23 +118,27 @@ export const McpApproveCommand = cmd({
         prompts.outro("Done")
         return
       }
-
       for (const [name, mcp] of entries) {
         if (mcp.enabled === false) {
           prompts.log.info(`${name} ${UI.Style.TEXT_DIM}(disabled)`)
           continue
         }
+        // Skip MCPs that are identical to global config
+        const globalSpec = globalCfg.mcp?.[name]
+        const isGlobalSame =
+          globalSpec && JSON.stringify(normalizedSpec(globalSpec as any)) === JSON.stringify(normalizedSpec(mcp as any))
+        if (isGlobalSame) {
+          continue
+        }
         const hash = specHash(name, mcp as any)
         const current = approvals[app.path.root][name]
         const approved = current?.approved === true && current?.hash === hash
-        const isGlobalSame =
-          globalCfg.mcp?.[name] && JSON.stringify((globalCfg.mcp as any)[name]) === JSON.stringify(mcp)
         const label =
           mcp.type === "local"
             ? `${name} (local) ${JSON.stringify((mcp as any).command)}`
             : `${name} (remote) ${(mcp as any).url}`
 
-        if (approved || isGlobalSame) {
+        if (approved) {
           prompts.log.info(label + UI.Style.TEXT_DIM + " (already approved)")
           continue
         }
