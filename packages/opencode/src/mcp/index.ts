@@ -138,12 +138,12 @@ export namespace MCP {
           let lastError: Error | undefined
           for (const { name, transport } of transports) {
             const client = await experimental_createMCPClient({
-              name: name,
+              name: key,
               transport,
             }).catch((error) => {
               lastError = error instanceof Error ? error : new Error(String(error))
               log.debug("transport connection failed", {
-                key: name,
+                key,
                 transport: name,
                 url: mcp.url,
                 error: lastError.message,
@@ -151,8 +151,8 @@ export namespace MCP {
               return null
             })
             if (client) {
-              log.debug("transport connection succeeded", { key: name, transport: name })
-              clients[name] = client
+              log.debug("transport connection succeeded", { key, transport: name })
+              clients[key] = client
               break
             }
           }
