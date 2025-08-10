@@ -1,4 +1,3 @@
-import crypto from "crypto"
 import path from "path"
 import fs from "fs/promises"
 import { cmd } from "./cmd"
@@ -7,8 +6,8 @@ import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/
 import * as prompts from "@clack/prompts"
 import { UI } from "../ui"
 import { Config } from "../../config/config"
-import { Global } from "../../global"
 import { App } from "../../app/app"
+import { MCP } from "../../mcp"
 import { bootstrap } from "../bootstrap"
 
 export const McpCommand = cmd({
@@ -86,17 +85,6 @@ export const McpAddCommand = cmd({
   },
 })
 
-function normalizedSpec(mcp: Config.Mcp) {
-  return mcp.type === "local"
-    ? { type: mcp.type, command: mcp.command, environment: mcp.environment ?? {} }
-    : { type: mcp.type, url: mcp.url, headers: mcp.headers ?? {} }
-}
-
-function specHash(name: string, mcp: Config.Mcp) {
-  const json = JSON.stringify({ name, normalized: normalizedSpec(mcp) })
-  return crypto.createHash("sha256").update(json).digest("hex")
-}
-
 export const McpApproveCommand = cmd({
   command: "approve",
   describe: "review and approve MCP servers in the current project",
@@ -105,58 +93,50 @@ export const McpApproveCommand = cmd({
       UI.empty()
       prompts.intro("Approve MCP servers")
       const cfg = await Config.get()
-      const globalCfg = await Config.global()
-      const app = App.info()
-      const approvalsPath = path.join(Global.Path.data, "mcp-approvals.json")
-      const file = Bun.file(approvalsPath)
-      const approvals: Record<string, any> = await file.json().catch(() => ({}))
-      approvals[app.path.root] = approvals[app.path.root] || {}
-
       const entries = Object.entries(cfg.mcp ?? {})
       if (entries.length === 0) {
         prompts.log.info("No MCP servers defined in config")
         prompts.outro("Done")
         return
       }
+
+      const allApprovals = await MCP.readApprovals()
+      const app = App.info()
+      const projectApprovals = allApprovals[app.path.root] || {}
+
       for (const [name, mcp] of entries) {
         if (mcp.enabled === false) {
           prompts.log.info(`${name} ${UI.Style.TEXT_DIM}(disabled)`)
           continue
         }
-        // Skip MCPs that are identical to global config
-        const globalSpec = globalCfg.mcp?.[name]
-        const isGlobalSame =
-          globalSpec && JSON.stringify(normalizedSpec(globalSpec)) === JSON.stringify(normalizedSpec(mcp))
-        if (isGlobalSame) {
+        if (await MCP.isFromGlobal(mcp, name)) {
           continue
         }
-        const hash = specHash(name, mcp)
-        const current = approvals[app.path.root][name]
-        const currentApproved: boolean | undefined = current?.approved
+
+        const hash = MCP.specHash(name, mcp)
+        const currentApproved = projectApprovals[name]?.approved
         const label =
           mcp.type === "local" ? `${name} (local) ${JSON.stringify(mcp.command)}` : `${name} (remote) ${mcp.url}`
 
         const res = await prompts.select({
           message: `Approve ${label}?`,
           options: [
-            { label: "Approve", value: "approve" },
-            { label: "Reject", value: "reject" },
+            { label: "Approve", value: "approve" as const },
+            { label: "Reject", value: "reject" as const },
           ],
-          initialValue: currentApproved ? "approve" : currentApproved === false ? "reject" : undefined,
+          initialValue: currentApproved === false ? ("reject" as const) : ("approve" as const),
         })
         if (prompts.isCancel(res)) throw new UI.CancelledError()
 
-        if (res === "reject") {
-          approvals[app.path.root][name] = { approved: false, hash, time: Date.now() }
-          continue
-        }
-
-        approvals[app.path.root][name] = { approved: true, hash, time: Date.now() }
+        projectApprovals[name] = { approved: res === "approve", hash, time: Date.now() }
       }
 
-      await fs.mkdir(path.dirname(approvalsPath), { recursive: true }).catch(() => {})
-      await Bun.write(approvalsPath, JSON.stringify(approvals, null, 2))
-      await fs.chmod(approvalsPath, 0o600).catch(() => {})
+      await fs.mkdir(path.dirname(MCP.mcpApprovalsJson), { recursive: true })
+      await Bun.write(
+        MCP.mcpApprovalsJson,
+        JSON.stringify({ ...allApprovals, [app.path.root]: projectApprovals }, null, 2),
+      )
+      await fs.chmod(MCP.mcpApprovalsJson, 0o600)
 
       prompts.outro("Done")
     })

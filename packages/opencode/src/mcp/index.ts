@@ -16,7 +16,7 @@ import { Global } from "../global"
 export namespace MCP {
   const log = Log.create({ service: "mcp" })
 
-  type ApprovalRecord = {
+  type ApprovalRecords = {
     [projectKey: string]: {
       [mcpKey: string]: {
         hash: string
@@ -26,48 +26,29 @@ export namespace MCP {
     }
   }
 
-  const approvalsPath = path.join(Global.Path.data, "mcp-approvals.json")
+  export const mcpApprovalsJson = path.join(Global.Path.data, "mcp-approvals.json")
 
-  async function readApprovals(): Promise<ApprovalRecord> {
-    const file = Bun.file(approvalsPath)
-    return file.json().catch(() => ({}))
-  }
-
-  function normalizedSpec(mcp: Config.Mcp) {
+  export function normalizedSpec(mcp: Config.Mcp) {
     return mcp.type === "local"
       ? { type: mcp.type, command: mcp.command, environment: mcp.environment ?? {} }
       : { type: mcp.type, url: mcp.url, headers: mcp.headers ?? {} }
   }
 
-  function specHash(name: string, mcp: Config.Mcp) {
+  export function specHash(name: string, mcp: Config.Mcp) {
     const json = JSON.stringify({ name, normalized: normalizedSpec(mcp) })
     return crypto.createHash("sha256").update(json).digest("hex")
   }
 
-  function projectKey() {
-    const app = App.info()
-    return app.path.root
+  export async function isFromGlobal(mcp: Config.Mcp, name: string) {
+    const globalCfg = await Config.global()
+    const globalSpec = globalCfg.mcp?.[name]
+    return globalSpec && JSON.stringify(normalizedSpec(globalSpec)) === JSON.stringify(normalizedSpec(mcp))
   }
 
-  async function isApproved(name: string, mcp: Config.Mcp) {
-    const key = projectKey()
-    const approvals = await readApprovals()
-    const rec = approvals[key]?.[name]
-    const hash = specHash(name, mcp)
-    return rec?.approved && rec.hash === hash
-  }
-
-  async function isRejected(name: string) {
-    const key = projectKey()
-    const approvals = await readApprovals()
-    const rec = approvals[key]?.[name]
-    return rec?.approved === false
-  }
-
-  async function getApprovalRecord(name: string) {
-    const key = projectKey()
-    const approvals = await readApprovals()
-    return approvals[key]?.[name]
+  export async function readApprovals() {
+    const file = Bun.file(mcpApprovalsJson)
+    const allApprovals: ApprovalRecords = await file.json().catch(() => ({}))
+    return allApprovals || {}
   }
 
   export const Failed = NamedError.create(
@@ -81,49 +62,46 @@ export namespace MCP {
     "mcp",
     async () => {
       const cfg = await Config.get()
-      const globalCfg = await Config.global()
       const clients: {
         [name: string]: Awaited<ReturnType<typeof experimental_createMCPClient>>
       } = {}
-      for (const [key, mcp] of Object.entries(cfg.mcp ?? {})) {
+      const allApprovals = await readApprovals()
+      const app = App.info()
+      const projectApprovals = allApprovals[app.path.root] || {}
+
+      for (const [name, mcp] of Object.entries(cfg.mcp ?? {})) {
         if (mcp.enabled === false) {
-          log.info("mcp server disabled", { key })
+          log.info("mcp server disabled", { key: name })
           continue
         }
-        // Allow MCPs sourced from global config without approval
-        const globalSpec = globalCfg.mcp?.[key]
-        const isGlobalSame =
-          globalSpec && JSON.stringify(normalizedSpec(globalSpec)) === JSON.stringify(normalizedSpec(mcp))
 
-        let approved = false
-        if (isGlobalSame) {
-          approved = true
-        } else {
-          const rejected = await isRejected(key)
-          if (rejected) {
-            log.info("mcp server rejected", { key })
-            continue
-          }
-          approved = await isApproved(key, mcp)
-          if (!approved) {
-            const rec = await getApprovalRecord(key)
-            const msg =
-              rec && rec.approved && rec.hash !== specHash(key, mcp)
-                ? `MCP server "${key}" has changed since last approval. Run 'opencode mcp approve' to review and enable it.`
-                : `MCP server "${key}" requires approval. Run 'opencode mcp approve' to review and enable it.`
-            log.info("mcp server awaiting approval", { key, type: mcp.type })
-            Bus.publish(Session.Event.Error, {
-              error: {
-                name: "UnknownError",
-                data: {
-                  message: msg,
-                },
-              },
-            })
-            continue
-          }
+        const approval = projectApprovals[name]
+        if (approval?.approved === false) {
+          log.info("mcp server rejected", { key: name })
+          continue
         }
-        log.info("found", { key, type: mcp.type })
+
+        const hash = specHash(name, mcp)
+        const specChanged = approval?.hash !== hash
+        const isApproved = approval?.approved && !specChanged
+        if (!(await isFromGlobal(mcp, name)) && !isApproved) {
+          const msg =
+            approval?.approved && specChanged
+              ? `MCP server "${name}" has changed since last approval. Run 'opencode mcp approve' to review and enable it.`
+              : `MCP server "${name}" requires approval. Run 'opencode mcp approve' to review and enable it.`
+          log.info("mcp server awaiting approval", { key: name, type: mcp.type })
+          Bus.publish(Session.Event.Error, {
+            error: {
+              name: "UnknownError",
+              data: {
+                message: msg,
+              },
+            },
+          })
+          continue
+        }
+
+        log.info("found", { key: name, type: mcp.type })
         if (mcp.type === "remote") {
           const transports = [
             {
@@ -146,12 +124,12 @@ export namespace MCP {
           let lastError: Error | undefined
           for (const { name, transport } of transports) {
             const client = await experimental_createMCPClient({
-              name: key,
+              name: name,
               transport,
             }).catch((error) => {
               lastError = error instanceof Error ? error : new Error(String(error))
               log.debug("transport connection failed", {
-                key,
+                key: name,
                 transport: name,
                 url: mcp.url,
                 error: lastError.message,
@@ -159,16 +137,16 @@ export namespace MCP {
               return null
             })
             if (client) {
-              log.debug("transport connection succeeded", { key, transport: name })
-              clients[key] = client
+              log.debug("transport connection succeeded", { key: name, transport: name })
+              clients[name] = client
               break
             }
           }
-          if (!clients[key]) {
+          if (!clients[name]) {
             const errorMessage = lastError
-              ? `MCP server ${key} failed to connect: ${lastError.message}`
-              : `MCP server ${key} failed to connect to ${mcp.url}`
-            log.error("remote mcp connection failed", { key, url: mcp.url, error: lastError?.message })
+              ? `MCP server ${name} failed to connect: ${lastError.message}`
+              : `MCP server ${name} failed to connect to ${mcp.url}`
+            log.error("remote mcp connection failed", { key: name, url: mcp.url, error: lastError?.message })
             Bus.publish(Session.Event.Error, {
               error: {
                 name: "UnknownError",
@@ -183,7 +161,7 @@ export namespace MCP {
         if (mcp.type === "local") {
           const [cmd, ...args] = mcp.command
           const client = await experimental_createMCPClient({
-            name: key,
+            name: name,
             transport: new StdioClientTransport({
               stderr: "ignore",
               command: cmd,
@@ -197,10 +175,10 @@ export namespace MCP {
           }).catch((error) => {
             const errorMessage =
               error instanceof Error
-                ? `MCP server ${key} failed to start: ${error.message}`
-                : `MCP server ${key} failed to start`
+                ? `MCP server ${name} failed to start: ${error.message}`
+                : `MCP server ${name} failed to start`
             log.error("local mcp startup failed", {
-              key,
+              key: name,
               command: mcp.command,
               error: error instanceof Error ? error.message : String(error),
             })
@@ -215,7 +193,7 @@ export namespace MCP {
             return null
           })
           if (client) {
-            clients[key] = client
+            clients[name] = client
           }
         }
       }
