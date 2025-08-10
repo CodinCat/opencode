@@ -16,13 +16,15 @@ import { Bus } from "../bus"
 export namespace MCP {
   const log = Log.create({ service: "mcp" })
 
-  type ApprovalRecord = {
-    [mcpKey: string]: {
-      hash: string
-      approved: boolean
-      time: number
-    }
-  }
+  const Approvals = z.record(
+    z.string(),
+    z.object({
+      hash: z.string(),
+      approved: z.boolean(),
+      time: z.number(),
+    }),
+  )
+  type Approvals = z.infer<typeof Approvals>
 
   export function normalizedSpec(mcp: Config.Mcp) {
     return mcp.type === "local"
@@ -44,16 +46,24 @@ export namespace MCP {
   export async function readApprovals() {
     const app = App.info()
     const mcpFile = path.join(app.path.data, "mcp.json")
-    const approvals: ApprovalRecord = await Bun.file(mcpFile)
+    const data = await Bun.file(mcpFile)
       .json()
       .catch(() => ({}))
-    return approvals || {}
+
+    const parsed = Approvals.safeParse(data)
+    if (parsed.success) {
+      return parsed.data
+    }
+
+    log.warn("invalid mcp approvals file, resetting", { file: mcpFile })
+    return {}
   }
 
-  export async function writeApprovals(approvals: ApprovalRecord) {
+  export async function writeApprovals(approvals: Approvals) {
     const app = App.info()
     const mcpFile = path.join(app.path.data, "mcp.json")
-    await Bun.write(mcpFile, JSON.stringify(approvals, null, 2))
+    const parsed = Approvals.parse(approvals)
+    await Bun.write(mcpFile, JSON.stringify(parsed, null, 2))
     await fs.chmod(mcpFile, 0o600)
   }
 
