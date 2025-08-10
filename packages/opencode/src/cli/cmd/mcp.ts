@@ -108,7 +108,7 @@ export const McpApproveCommand = cmd({
           continue
         }
 
-        const hash = MCP.specHash(name, mcp)
+        const hash = MCP.configHash(name, mcp)
         const currentApproved = projectApprovals[name]?.approved
         const label =
           mcp.type === "local" ? `${name} (local) ${JSON.stringify(mcp.command)}` : `${name} (remote) ${mcp.url}`

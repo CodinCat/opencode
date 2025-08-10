@@ -32,7 +32,7 @@ export namespace MCP {
       : { type: mcp.type, url: mcp.url, headers: mcp.headers ?? {} }
   }
 
-  export function specHash(name: string, mcp: Config.Mcp) {
+  export function configHash(name: string, mcp: Config.Mcp) {
     const json = JSON.stringify({ name, normalized: normalizedSpec(mcp) })
     return crypto.createHash("sha256").update(json).digest("hex")
   }
@@ -95,12 +95,12 @@ export namespace MCP {
           continue
         }
 
-        const hash = specHash(key, mcp)
-        const specChanged = approval?.hash !== hash
-        const isApproved = approval?.approved && !specChanged
+        const hash = configHash(key, mcp)
+        const configChanged = approval?.hash !== hash
+        const isApproved = approval?.approved && !configChanged
         if (!(await isFromGlobal(mcp, key)) && !isApproved) {
           const msg =
-            approval?.approved && specChanged
+            approval?.approved && configChanged
               ? `MCP server "${key}" has changed since last approval. Run 'opencode mcp approve' to review and enable it.`
               : `MCP server "${key}" requires approval. Run 'opencode mcp approve' to review and enable it.`
           log.info("mcp server awaiting approval", { key, type: mcp.type })
