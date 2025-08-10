@@ -1,5 +1,4 @@
 import path from "path"
-import fs from "fs/promises"
 import crypto from "crypto"
 import { experimental_createMCPClient, type Tool } from "ai"
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js"
@@ -32,12 +31,6 @@ export namespace MCP {
   async function readApprovals(): Promise<ApprovalRecord> {
     const file = Bun.file(approvalsPath)
     return file.json().catch(() => ({}))
-  }
-
-  async function writeApprovals(data: ApprovalRecord) {
-    await fs.mkdir(path.dirname(approvalsPath), { recursive: true }).catch(() => {})
-    await Bun.write(approvalsPath, JSON.stringify(data, null, 2))
-    await fs.chmod(approvalsPath, 0o600).catch(() => {})
   }
 
   function normalizedSpec(mcp: Config.Mcp) {
@@ -75,14 +68,6 @@ export namespace MCP {
     const key = projectKey()
     const approvals = await readApprovals()
     return approvals[key]?.[name]
-  }
-
-  async function markApproved(name: string, mcp: Config.Mcp) {
-    const key = projectKey()
-    const approvals = await readApprovals()
-    approvals[key] = approvals[key] || {}
-    approvals[key]![name] = { approved: true, hash: specHash(name, mcp), time: Date.now() }
-    await writeApprovals(approvals)
   }
 
   export const Failed = NamedError.create(
