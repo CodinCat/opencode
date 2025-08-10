@@ -69,27 +69,27 @@ export namespace MCP {
       const app = App.info()
       const projectApprovals = allApprovals[app.path.root] || {}
 
-      for (const [name, mcp] of Object.entries(cfg.mcp ?? {})) {
+      for (const [key, mcp] of Object.entries(cfg.mcp ?? {})) {
         if (mcp.enabled === false) {
-          log.info("mcp server disabled", { key: name })
+          log.info("mcp server disabled", { key })
           continue
         }
 
-        const approval = projectApprovals[name]
+        const approval = projectApprovals[key]
         if (approval?.approved === false) {
-          log.info("mcp server rejected", { key: name })
+          log.info("mcp server rejected", { key })
           continue
         }
 
-        const hash = specHash(name, mcp)
+        const hash = specHash(key, mcp)
         const specChanged = approval?.hash !== hash
         const isApproved = approval?.approved && !specChanged
-        if (!(await isFromGlobal(mcp, name)) && !isApproved) {
+        if (!(await isFromGlobal(mcp, key)) && !isApproved) {
           const msg =
             approval?.approved && specChanged
-              ? `MCP server "${name}" has changed since last approval. Run 'opencode mcp approve' to review and enable it.`
-              : `MCP server "${name}" requires approval. Run 'opencode mcp approve' to review and enable it.`
-          log.info("mcp server awaiting approval", { key: name, type: mcp.type })
+              ? `MCP server "${key}" has changed since last approval. Run 'opencode mcp approve' to review and enable it.`
+              : `MCP server "${key}" requires approval. Run 'opencode mcp approve' to review and enable it.`
+          log.info("mcp server awaiting approval", { key, type: mcp.type })
           Bus.publish(Session.Event.Error, {
             error: {
               name: "UnknownError",
@@ -101,7 +101,7 @@ export namespace MCP {
           continue
         }
 
-        log.info("found", { key: name, type: mcp.type })
+        log.info("found", { key, type: mcp.type })
         if (mcp.type === "remote") {
           const transports = [
             {
@@ -142,11 +142,11 @@ export namespace MCP {
               break
             }
           }
-          if (!clients[name]) {
+          if (!clients[key]) {
             const errorMessage = lastError
-              ? `MCP server ${name} failed to connect: ${lastError.message}`
-              : `MCP server ${name} failed to connect to ${mcp.url}`
-            log.error("remote mcp connection failed", { key: name, url: mcp.url, error: lastError?.message })
+              ? `MCP server ${key} failed to connect: ${lastError.message}`
+              : `MCP server ${key} failed to connect to ${mcp.url}`
+            log.error("remote mcp connection failed", { key, url: mcp.url, error: lastError?.message })
             Bus.publish(Session.Event.Error, {
               error: {
                 name: "UnknownError",
@@ -161,7 +161,7 @@ export namespace MCP {
         if (mcp.type === "local") {
           const [cmd, ...args] = mcp.command
           const client = await experimental_createMCPClient({
-            name: name,
+            name: key,
             transport: new StdioClientTransport({
               stderr: "ignore",
               command: cmd,
@@ -175,10 +175,10 @@ export namespace MCP {
           }).catch((error) => {
             const errorMessage =
               error instanceof Error
-                ? `MCP server ${name} failed to start: ${error.message}`
-                : `MCP server ${name} failed to start`
+                ? `MCP server ${key} failed to start: ${error.message}`
+                : `MCP server ${key} failed to start`
             log.error("local mcp startup failed", {
-              key: name,
+              key,
               command: mcp.command,
               error: error instanceof Error ? error.message : String(error),
             })
@@ -193,7 +193,7 @@ export namespace MCP {
             return null
           })
           if (client) {
-            clients[name] = client
+            clients[key] = client
           }
         }
       }
