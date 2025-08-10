@@ -36,7 +36,7 @@ export namespace MCP {
   function normalizedSpec(mcp: Config.Mcp) {
     return mcp.type === "local"
       ? { type: mcp.type, command: mcp.command, environment: mcp.environment ?? {} }
-      : { type: mcp.type, url: (mcp as any).url, headers: (mcp as any).headers ?? {} }
+      : { type: mcp.type, url: mcp.url, headers: mcp.headers ?? {} }
   }
 
   function specHash(name: string, mcp: Config.Mcp) {
@@ -54,7 +54,7 @@ export namespace MCP {
     const approvals = await readApprovals()
     const rec = approvals[key]?.[name]
     const hash = specHash(name, mcp)
-    return rec?.approved === true && rec.hash === hash
+    return rec?.approved && rec.hash === hash
   }
 
   async function isRejected(name: string) {
@@ -93,7 +93,7 @@ export namespace MCP {
         // Allow MCPs sourced from global config without approval
         const globalSpec = globalCfg.mcp?.[key]
         const isGlobalSame =
-          globalSpec && JSON.stringify(normalizedSpec(globalSpec as any)) === JSON.stringify(normalizedSpec(mcp as any))
+          globalSpec && JSON.stringify(normalizedSpec(globalSpec)) === JSON.stringify(normalizedSpec(mcp))
 
         let approved = false
         if (isGlobalSame) {
@@ -108,7 +108,7 @@ export namespace MCP {
           if (!approved) {
             const rec = await getApprovalRecord(key)
             const msg =
-              rec && rec.approved === true && rec.hash !== specHash(key, mcp)
+              rec && rec.approved && rec.hash !== specHash(key, mcp)
                 ? `MCP server "${key}" has changed since last approval. Run 'opencode mcp approve' to review and enable it.`
                 : `MCP server "${key}" requires approval. Run 'opencode mcp approve' to review and enable it.`
             log.info("mcp server awaiting approval", { key, type: mcp.type })
